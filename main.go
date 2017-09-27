@@ -8,6 +8,13 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"flag"
+	"bytes"
+)
+
+const (
+	UPDATE_URL         = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"
+	DETECT_ADDRESS_URL = "https://api.ipify.org/?format=json"
 )
 
 var config = struct {
@@ -35,7 +42,7 @@ func loadConfig(filename string) {
 	}
 }
 
-type Address struct {
+type LocalAddress struct {
 	Ip string `json:"ip"`
 }
 
@@ -48,28 +55,6 @@ type Record struct {
 	Errors   []string `json:"errors"`
 	Messages []string `json:"messages"`
 	Result   Result   `json:"result"`
-}
-
-func publicAddress() string {
-	url := "https://api.ipify.org/?format=json"
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Println("check public address failed")
-	}
-
-	body, _ := ioutil.ReadAll(resp.Body)
-
-	address := Address{}
-	err = json.Unmarshal(body, &address)
-	if err != nil {
-		log.Printf("unmarshal response body failed, err: %v\n", err)
-	}
-
-	return address.Ip
 }
 
 type Form struct {
@@ -89,19 +74,45 @@ func NewForm(ip string) *Form {
 }
 
 type Updater struct {
-	url         string
-	lastAddress string
+	url string
+
+	client *http.Client
 }
 
 func NewUpdater() *Updater {
-	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s",
-		config.ZoneID, config.RecordID)
+	url := fmt.Sprintf(UPDATE_URL, config.ZoneID, config.RecordID)
+	cli := http.Client{
+		Timeout: 10 * time.Second,
+	}
 	return &Updater{
-		url: url,
+		url:    url,
+		client: &cli,
 	}
 }
 
+func (updater Updater) getLocalAddress() string {
+	resp, err := http.Get(DETECT_ADDRESS_URL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Println("check public address failed")
+	}
+
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	address := LocalAddress{}
+	err = json.Unmarshal(body, &address)
+	if err != nil {
+		log.Printf("unmarshal response body failed, err: %v\n", err)
+	}
+
+	return address.Ip
+}
+
 func (updater Updater) setDefaultHeader(r *http.Request) {
+	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-Auth-Key", config.ApiKey)
 	r.Header.Set("X-Auth-Email", config.Email)
 }
@@ -110,10 +121,7 @@ func (updater Updater) getDNS() string {
 	request, _ := http.NewRequest("GET", updater.url, nil)
 	updater.setDefaultHeader(request)
 
-	client := http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(request)
+	resp, err := updater.client.Do(request)
 	if err != nil {
 		log.Printf("get dns record failed, err: %v\n", err)
 	}
@@ -128,8 +136,6 @@ func (updater Updater) getDNS() string {
 		log.Printf("read response body error: %v", err)
 	}
 
-	log.Println(string(body))
-
 	record := Record{}
 	err = json.Unmarshal(body, &record)
 	if err != nil {
@@ -140,13 +146,61 @@ func (updater Updater) getDNS() string {
 	return record.Result.Content
 }
 
-func (updater Updater) updateDNS() {
+func (updater Updater) setDNS(addr string) (ok bool) {
+	form := NewForm(addr)
+	formData, _ := json.Marshal(&form)
 
+	body := bytes.NewReader(formData)
+	request, _ := http.NewRequest("PUT", updater.url, body)
+	updater.setDefaultHeader(request)
+	resp, err := updater.client.Do(request)
+	if err != nil {
+		log.Printf("do post request error: %v", err)
+		return
+	}
+
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("parse response error: %v", err)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Println("update request failed")
+		log.Println(string(respBody))
+		return
+	}
+
+	result := map[string]interface{}{}
+	json.Unmarshal(respBody, &result)
+
+	success := result["success"]
+	return success.(bool)
+}
+
+func (updater Updater) Run() {
+	for {
+		localAddress := updater.getLocalAddress()
+		log.Printf("local pubilic address is: %s", localAddress)
+
+		lastRecord := updater.getDNS()
+		log.Printf("current record is: %s", lastRecord)
+
+		if localAddress != "" && localAddress != lastRecord {
+			done := updater.setDNS(localAddress)
+			log.Printf("dns record updated: %v", done)
+		}
+
+		time.Sleep(1 * time.Minute)
+	}
 }
 
 func main() {
-	//publicAddress()
+	filePath := flag.String("c", "ddns.json", "ddns.json")
+	flag.Parse()
 
-	loadConfig("ddns.dev.json")
+	loadConfig(*filePath)
 
+	updater := NewUpdater()
+	updater.Run()
 }
