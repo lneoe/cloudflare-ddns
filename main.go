@@ -10,6 +10,7 @@ import (
 	"time"
 	"flag"
 	"bytes"
+	"os/exec"
 )
 
 const (
@@ -90,25 +91,36 @@ func NewUpdater() *Updater {
 	}
 }
 
+//func (updater Updater) getLocalAddress() string {
+//	resp, err := http.Get(DETECT_ADDRESS_URL)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	if resp.StatusCode != http.StatusOK {
+//		log.Println("check public address failed")
+//	}
+//
+//	body, _ := ioutil.ReadAll(resp.Body)
+//
+//	address := LocalAddress{}
+//	err = json.Unmarshal(body, &address)
+//	if err != nil {
+//		log.Printf("unmarshal response body failed, err: %v\n", err)
+//	}
+//
+//	return address.Ip
+//}
+
 func (updater Updater) getLocalAddress() string {
-	resp, err := http.Get(DETECT_ADDRESS_URL)
+	cmd := exec.Command("/bin/sh", "-c", "ip addr show pppoe-wan | awk 'NR==3 {print $2}'")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("get local address error: %v\n", err)
+		return ""
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		log.Println("check public address failed")
-	}
-
-	body, _ := ioutil.ReadAll(resp.Body)
-
-	address := LocalAddress{}
-	err = json.Unmarshal(body, &address)
-	if err != nil {
-		log.Printf("unmarshal response body failed, err: %v\n", err)
-	}
-
-	return address.Ip
+	return string(output)
 }
 
 func (updater Updater) setDefaultHeader(r *http.Request) {
