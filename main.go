@@ -1,16 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"time"
-	"flag"
-	"bytes"
 	"os/exec"
+	"time"
 )
 
 const (
@@ -120,6 +120,7 @@ func (updater Updater) getLocalAddress() string {
 		return ""
 	}
 
+	output = output[:len(output)-1]
 	return string(output)
 }
 
