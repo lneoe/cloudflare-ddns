@@ -137,6 +137,7 @@ func (updater Updater) getDNS() string {
 	resp, err := updater.client.Do(request)
 	if err != nil {
 		log.Printf("get dns record failed, err: %v\n", err)
+		return ""
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -147,6 +148,7 @@ func (updater Updater) getDNS() string {
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("read response body error: %v", err)
+		return ""
 	}
 
 	record := Record{}
