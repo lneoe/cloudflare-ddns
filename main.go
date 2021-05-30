@@ -150,7 +150,7 @@ func (updater Updater) setDNS(addr string) (ok bool) {
 	}
 
 	result := map[string]interface{}{}
-	json.Unmarshal(respBody, &result)
+	_ = json.Unmarshal(respBody, &result)
 
 	success := result["success"]
 	return success.(bool)
@@ -199,7 +199,7 @@ func main() {
 	detector := NewDetector(*detectorName)
 	updater := NewUpdater()
 
-	for _ = range ticker.C {
+	for range ticker.C {
 		loc, err := detector.Determine()
 		if err != nil {
 			log.Printf("error occurred: %s", err)
