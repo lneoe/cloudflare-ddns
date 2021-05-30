@@ -9,18 +9,15 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"time"
 )
 
 const (
-	UPDATE_URL         = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"
-	DETECT_ADDRESS_URL = "https://api.ipify.org/?format=json"
+	UPDATE_URL = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"
 )
 
 var config = struct {
-	ApiKey   string `json:"api_key"`
-	Email    string `json:"email"`
+	Token    string `json:"token"`
 	ZoneID   string `json:"zone_id"`
 	Domain   string `json:"domain"`
 	RecordID string `json:"record_id"`
@@ -91,43 +88,9 @@ func NewUpdater() *Updater {
 	}
 }
 
-//func (updater Updater) getLocalAddress() string {
-//	resp, err := http.Get(DETECT_ADDRESS_URL)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//
-//	if resp.StatusCode != http.StatusOK {
-//		log.Println("check public address failed")
-//	}
-//
-//	body, _ := ioutil.ReadAll(resp.Body)
-//
-//	address := LocalAddress{}
-//	err = json.Unmarshal(body, &address)
-//	if err != nil {
-//		log.Printf("unmarshal response body failed, err: %v\n", err)
-//	}
-//
-//	return address.Ip
-//}
-
-func (updater Updater) getLocalAddress() string {
-	cmd := exec.Command("/bin/sh", "-c", "ip addr show pppoe-wan | awk 'NR==3 {print $2}'")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("get local address error: %v\n", err)
-		return ""
-	}
-
-	output = output[:len(output)-1]
-	return string(output)
-}
-
 func (updater Updater) setDefaultHeader(r *http.Request) {
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("X-Auth-Key", config.ApiKey)
-	r.Header.Set("X-Auth-Email", config.Email)
+	r.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.Token))
 }
 
 func (updater Updater) getDNS() string {
@@ -193,29 +156,56 @@ func (updater Updater) setDNS(addr string) (ok bool) {
 	return success.(bool)
 }
 
-func (updater Updater) Run() {
-	for {
-		localAddress := updater.getLocalAddress()
-		log.Printf("local pubilic address is: %s", localAddress)
+func (updater Updater) UpdateIfChanged(localRecord string) {
+	lastRecord := updater.getDNS()
+	log.Printf("cloudflare current record is: %q", lastRecord)
 
-		lastRecord := updater.getDNS()
-		log.Printf("current record is: %s", lastRecord)
-
-		if localAddress != "" && localAddress != lastRecord {
-			done := updater.setDNS(localAddress)
-			log.Printf("dns record updated: %v", done)
-		}
-
-		time.Sleep(1 * time.Minute)
+	if localRecord != "" && localRecord != lastRecord {
+		done := updater.setDNS(localRecord)
+		log.Printf("dns record updated: %v", done)
 	}
 }
 
+func NewDetector(name string) Detective {
+	switch name {
+	case "ipify":
+		return &IpifyAPIImpl{}
+	case "ip-cmd":
+		return &UseIpCmd{}
+	}
+
+	panic(fmt.Sprintf("unsupported detector %s", name))
+}
+
 func main() {
-	filePath := flag.String("c", "ddns.json", "ddns.json")
+	filePath := flag.String("c", "ddns.sample.json", "json config file path")
+	detectorName := flag.String("d", "ipify", "")
+	intervalStr := flag.String("i", "5m", "interval, default: 5m")
 	flag.Parse()
+
+	interval, err := time.ParseDuration(*intervalStr)
+	if err != nil {
+		log.Panicf("interval format error %s", err)
+	}
+
+	if len(flag.Args()) > 0 && flag.Args()[0] == "version" {
+		PrintVersion()
+		os.Exit(0)
+	}
 
 	loadConfig(*filePath)
 
+	ticker := time.NewTicker(interval)
+	detector := NewDetector(*detectorName)
 	updater := NewUpdater()
-	updater.Run()
+
+	for _ = range ticker.C {
+		loc, err := detector.Determine()
+		if err != nil {
+			log.Printf("error occurred: %s", err)
+		} else {
+			log.Printf("detemined public ip is: %q", loc)
+			updater.UpdateIfChanged(loc)
+		}
+	}
 }

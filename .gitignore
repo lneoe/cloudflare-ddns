@@ -25,3 +25,5 @@ gen### Go template
 /ddns.dev.json
 /main
 /ddns
+/bin
+/dist

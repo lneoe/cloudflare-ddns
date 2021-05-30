@@ -10,3 +10,6 @@ GOOS=linux GOARCH=arm go build -o ddns main.go
 | --- | --- |
 | arm | YES |
 | mips | not sure |
+
+## tips
+> your can use `upx` to compress binary size for router with little ram space
